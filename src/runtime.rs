@@ -25,7 +25,6 @@ use crate::terminal::TerminalSession;
 
 const EVENT_BUFFER: usize = 1_024;
 const DRAW_INTERVAL: Duration = Duration::from_millis(33);
-const TEST_URL: &str = "https://www.gstatic.com/generate_204";
 const TEST_TIMEOUT_MS: u64 = 5_000;
 
 pub async fn run(options: RuntimeOptions) -> Result<()> {
@@ -292,12 +291,16 @@ async fn execute_command(client: &ControllerClient, command: Command) -> Result<
                 format!("{group} 已切换到 {node}"),
             ))
         }
-        Command::TestProxy { name } => {
-            let delay = client.proxy_delay(&name, TEST_URL, TEST_TIMEOUT_MS).await?;
+        Command::TestProxy { name, test_url } => {
+            let delay = client
+                .proxy_delay(&name, &test_url, TEST_TIMEOUT_MS)
+                .await?;
             Ok(CommandOutcome::Delay { name, delay })
         }
-        Command::TestGroup { name } => {
-            let delay = client.group_delay(&name, TEST_URL, TEST_TIMEOUT_MS).await?;
+        Command::TestGroup { name, test_url } => {
+            let delay = client
+                .group_delay(&name, &test_url, TEST_TIMEOUT_MS)
+                .await?;
             Ok(CommandOutcome::Delay { name, delay })
         }
         Command::CloseConnection { id } => {

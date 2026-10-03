@@ -132,8 +132,8 @@ pub enum Command {
     RefreshConnections,
     RefreshProviders,
     SwitchProxy { group: String, node: String },
-    TestProxy { name: String },
-    TestGroup { name: String },
+    TestProxy { name: String, test_url: String },
+    TestGroup { name: String, test_url: String },
     CloseConnection { id: String },
     CloseAllConnections,
     SetMode { mode: String },
@@ -217,6 +217,7 @@ pub struct App {
     pub version: Option<VersionInfo>,
     pub config: Option<ConfigSnapshot>,
     pub proxies: BTreeMap<String, Proxy>,
+    pub proxy_order: Vec<String>,
     pub providers: BTreeMap<String, Provider>,
     pub rule_providers: BTreeMap<String, RuleProvider>,
     pub connections: ConnectionsSnapshot,
@@ -254,6 +255,7 @@ impl App {
             version: None,
             config: None,
             proxies: BTreeMap::new(),
+            proxy_order: Vec::new(),
             providers: BTreeMap::new(),
             rule_providers: BTreeMap::new(),
             connections: ConnectionsSnapshot::default(),
@@ -292,6 +294,7 @@ impl App {
     ) {
         self.version = Some(version);
         self.config = Some(config);
+        self.proxy_order = proxies.order;
         self.proxies = proxies.proxies;
         self.providers = providers.providers;
         for (name, provider) in &mut self.providers {
@@ -317,14 +320,86 @@ impl App {
     }
 
     pub fn proxy_groups(&self) -> Vec<&Proxy> {
-        self.proxies
-            .values()
-            .filter(|proxy| proxy.is_group() && !proxy.hidden)
-            .collect()
+        let mut groups: Vec<&Proxy> = Vec::new();
+        // Mihomo's GLOBAL group is the canonical ordering source used by
+        // zashboard.  The response order is only a fallback for groups that
+        // are not listed in GLOBAL.all (for example newly-added groups).
+        let mut ordered_names = self
+            .proxies
+            .get("GLOBAL")
+            .or_else(|| {
+                self.proxies
+                    .values()
+                    .find(|proxy| proxy.name.eq_ignore_ascii_case("GLOBAL"))
+            })
+            .map(|global| global.all.clone())
+            .unwrap_or_default();
+        ordered_names.extend(self.proxy_order.iter().cloned());
+
+        for name in &ordered_names {
+            if let Some(proxy) = self.proxies.get(name) {
+                if !name.eq_ignore_ascii_case("GLOBAL")
+                    && !proxy.hidden
+                    && !proxy.all.is_empty()
+                    && !groups.iter().any(|group| group.name == proxy.name)
+                {
+                    groups.push(proxy);
+                }
+            }
+        }
+        for proxy in self.proxies.values() {
+            if !proxy.name.eq_ignore_ascii_case("GLOBAL")
+                && !proxy.hidden
+                && !proxy.all.is_empty()
+                && !groups.iter().any(|group| group.name == proxy.name)
+            {
+                groups.push(proxy);
+            }
+        }
+        groups
     }
 
     pub fn selected_group(&self) -> Option<&Proxy> {
         self.proxy_groups().get(self.group_index).copied()
+    }
+
+    pub fn test_url_for_proxy(&self, name: &str) -> String {
+        const DEFAULT_TEST_URL: &str = "https://www.gstatic.com/generate_204";
+
+        // Mihomo proxy-group configuration is the core-level equivalent of
+        // zashboard's per-group test URL override.
+        if let Some(url) = self
+            .config
+            .as_ref()
+            .and_then(|config| config.proxy_groups.iter().find(|group| group.name == name))
+            .and_then(|group| group.test_url())
+        {
+            return url.to_string();
+        }
+
+        if let Some(url) = self
+            .proxies
+            .get(name)
+            .and_then(|proxy| proxy.test_url.as_deref())
+            .filter(|url| !url.trim().is_empty())
+        {
+            return url.to_string();
+        }
+
+        // Provider proxy entries are merged into zashboard's proxy map. If
+        // /proxies omits testUrl, use the provider-side copy as a fallback.
+        if let Some(url) = self
+            .providers
+            .values()
+            .flat_map(|provider| provider.proxies.iter())
+            .find(|proxy| proxy.name == name)
+            .and_then(|proxy| proxy.test_url.as_deref())
+            .filter(|url| !url.trim().is_empty())
+        {
+            return url.to_string();
+        }
+
+        DEFAULT_TEST_URL.to_string()
     }
 
     pub fn filtered_node_names(&self) -> Vec<&str> {
@@ -451,6 +526,7 @@ impl App {
     }
 
     pub fn apply_proxies(&mut self, response: ProxyResponse) {
+        self.proxy_order = response.order;
         self.proxies = response.proxies;
         self.clamp_selections();
         self.dirty = true;
@@ -565,18 +641,18 @@ impl App {
             return None;
         }
 
-        if key.code == KeyCode::Esc {
+        if key.code == KeyCode::Left {
             self.retreat_focus();
+            return None;
+        }
+
+        if key.code == KeyCode::Right {
+            self.advance_focus_wrapping();
             return None;
         }
 
         if self.focus == FocusTarget::RootMenu {
             return self.handle_root_navigation(key);
-        }
-
-        if key.code == KeyCode::Tab {
-            self.advance_focus_wrapping();
-            return None;
         }
 
         if key.code == KeyCode::Enter && self.advance_focus_if_available() {
@@ -622,9 +698,6 @@ impl App {
             }
             KeyCode::Enter => {
                 self.advance_focus_if_available();
-            }
-            KeyCode::Tab => {
-                self.advance_focus_wrapping();
             }
             _ => {}
         }
@@ -705,11 +778,13 @@ impl App {
             }
             KeyCode::Char('t') if self.focus == FocusTarget::ProxyNodes => {
                 let name = self.selected_node_name()?.to_string();
-                return Some(Command::TestProxy { name });
+                let test_url = self.test_url_for_proxy(&name);
+                return Some(Command::TestProxy { name, test_url });
             }
             KeyCode::Char('T') if self.focus == FocusTarget::ProxyGroups => {
                 let name = self.selected_group()?.name.clone();
-                return Some(Command::TestGroup { name });
+                let test_url = self.test_url_for_proxy(&name);
+                return Some(Command::TestGroup { name, test_url });
             }
             _ => return None,
         }
@@ -871,7 +946,7 @@ mod tests {
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
     use super::{App, Command, FocusTarget};
-    use crate::model::Proxy;
+    use crate::model::{ConfigSnapshot, Proxy, ProxyGroupConfig};
 
     fn key(code: KeyCode) -> KeyEvent {
         KeyEvent::new(code, KeyModifiers::NONE)
@@ -912,6 +987,120 @@ mod tests {
     }
 
     #[test]
+    fn proxy_groups_follow_global_order_and_skip_global() {
+        let mut app = App::new("http://localhost:9090".to_string(), false);
+        app.proxies = BTreeMap::from([
+            (
+                "GLOBAL".to_string(),
+                Proxy {
+                    name: "GLOBAL".to_string(),
+                    all: vec!["Streaming".to_string(), "Fallback".to_string()],
+                    ..Proxy::default()
+                },
+            ),
+            (
+                "Fallback".to_string(),
+                Proxy {
+                    name: "Fallback".to_string(),
+                    kind: "Fallback".to_string(),
+                    all: vec!["A".to_string()],
+                    ..Proxy::default()
+                },
+            ),
+            (
+                "Streaming".to_string(),
+                Proxy {
+                    name: "Streaming".to_string(),
+                    kind: "Selector".to_string(),
+                    all: vec!["A".to_string()],
+                    ..Proxy::default()
+                },
+            ),
+            (
+                "A".to_string(),
+                Proxy {
+                    name: "A".to_string(),
+                    kind: "Shadowsocks".to_string(),
+                    ..Proxy::default()
+                },
+            ),
+        ]);
+        app.proxy_order = vec![
+            "GLOBAL".to_string(),
+            "Fallback".to_string(),
+            "Streaming".to_string(),
+            "A".to_string(),
+        ];
+
+        let names: Vec<_> = app
+            .proxy_groups()
+            .into_iter()
+            .map(|proxy| proxy.name.as_str())
+            .collect();
+        assert_eq!(names, ["Streaming", "Fallback"]);
+    }
+
+    #[test]
+    fn proxy_test_uses_node_configured_url_before_default() {
+        let mut app = App::new("http://localhost:9090".to_string(), false);
+        app.proxies = BTreeMap::from([
+            (
+                "GROUP".to_string(),
+                Proxy {
+                    name: "GROUP".to_string(),
+                    kind: "Selector".to_string(),
+                    all: vec!["NODE".to_string()],
+                    ..Proxy::default()
+                },
+            ),
+            (
+                "NODE".to_string(),
+                Proxy {
+                    name: "NODE".to_string(),
+                    test_url: Some("https://example.com/ping".to_string()),
+                    ..Proxy::default()
+                },
+            ),
+        ]);
+        app.page = super::Page::Proxies;
+        app.focus = FocusTarget::ProxyNodes;
+
+        let command = app.handle_key(key(KeyCode::Char('t')));
+        assert!(matches!(
+            command,
+            Some(Command::TestProxy { name, test_url })
+                if name == "NODE" && test_url == "https://example.com/ping"
+        ));
+    }
+
+    #[test]
+    fn group_test_prefers_core_configured_url() {
+        let mut app = App::new("http://localhost:9090".to_string(), false);
+        app.config = Some(ConfigSnapshot {
+            proxy_groups: vec![ProxyGroupConfig {
+                name: "GROUP".to_string(),
+                url: Some("https://example.com/group-check".to_string()),
+                ..ProxyGroupConfig::default()
+            }],
+            ..ConfigSnapshot::default()
+        });
+        app.proxies = BTreeMap::from([(
+            "GROUP".to_string(),
+            Proxy {
+                name: "GROUP".to_string(),
+                kind: "Selector".to_string(),
+                all: vec!["NODE".to_string()],
+                test_url: Some("https://example.com/proxy-check".to_string()),
+                ..Proxy::default()
+            },
+        )]);
+        assert_eq!(
+            app.test_url_for_proxy("GROUP"),
+            "https://example.com/group-check"
+        );
+    }
+
+    #[test]
     fn filter_input_never_quits_on_q() {
         let mut app = App::new("http://localhost:9090".to_string(), false);
         app.page = super::Page::Logs;
@@ -922,17 +1111,17 @@ mod tests {
     }
 
     #[test]
-    fn root_menu_uses_enter_and_escape_for_hierarchy() {
+    fn root_menu_uses_enter_and_arrow_focus_navigation() {
         let mut app = App::new("http://localhost:9090".to_string(), false);
         app.handle_key(key(KeyCode::Down));
         assert_eq!(app.page, super::Page::Proxies);
         app.handle_key(key(KeyCode::Enter));
         assert_eq!(app.focus, FocusTarget::ProxyGroups);
-        app.handle_key(key(KeyCode::Tab));
+        app.handle_key(key(KeyCode::Right));
         assert_eq!(app.focus, FocusTarget::ProxyNodes);
-        app.handle_key(key(KeyCode::Esc));
+        app.handle_key(key(KeyCode::Left));
         assert_eq!(app.focus, FocusTarget::ProxyGroups);
-        app.handle_key(key(KeyCode::Esc));
+        app.handle_key(key(KeyCode::Left));
         assert_eq!(app.focus, FocusTarget::RootMenu);
     }
 
@@ -1012,19 +1201,28 @@ mod tests {
             Some(Command::SwitchProxy { .. })
         ));
         assert_eq!(app.focus, FocusTarget::ProxyNodes);
-        app.handle_key(key(KeyCode::Tab));
+        app.handle_key(key(KeyCode::Right));
         assert_eq!(app.focus, FocusTarget::RootMenu);
     }
 
     #[test]
-    fn tab_and_escape_wrap_focus_chain() {
+    fn left_and_right_wrap_focus_chain() {
         let mut app = App::new("http://localhost:9090".to_string(), false);
         app.page = super::Page::Proxies;
         app.focus = FocusTarget::ProxyNodes;
-        app.handle_key(key(KeyCode::Tab));
+        app.handle_key(key(KeyCode::Right));
         assert_eq!(app.focus, FocusTarget::RootMenu);
-        app.handle_key(key(KeyCode::Esc));
+        app.handle_key(key(KeyCode::Left));
         assert_eq!(app.focus, FocusTarget::ProxyNodes);
+    }
+
+    #[test]
+    fn right_arrow_enters_first_panel_from_root_menu() {
+        let mut app = App::new("http://localhost:9090".to_string(), false);
+        app.page = super::Page::Proxies;
+        app.focus = FocusTarget::RootMenu;
+        app.handle_key(key(KeyCode::Right));
+        assert_eq!(app.focus, FocusTarget::ProxyGroups);
     }
 
     #[test]

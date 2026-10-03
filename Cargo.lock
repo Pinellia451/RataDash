@@ -1667,7 +1667,7 @@ dependencies = [
 
 [[package]]
 name = "ratadash"
-version = "0.1.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1682,6 +1682,7 @@ dependencies = [
  "thiserror 2.0.21",
  "tokio",
  "tokio-tungstenite",
+ "unicode-width",
  "url",
  "wiremock",
 ]

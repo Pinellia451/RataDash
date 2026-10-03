@@ -2,8 +2,9 @@
 
 use std::collections::BTreeMap;
 
-use serde::{Deserialize, Serialize};
+use serde::{de, Deserialize, Deserializer, Serialize};
 use serde_json::Value;
+use std::fmt;
 
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct VersionInfo {
@@ -31,6 +32,27 @@ pub struct ConfigSnapshot {
     pub log_level: String,
     #[serde(default)]
     pub tun: Option<TunSnapshot>,
+    #[serde(default, rename = "proxy-groups")]
+    pub proxy_groups: Vec<ProxyGroupConfig>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct ProxyGroupConfig {
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub url: Option<String>,
+    #[serde(default, rename = "testUrl", alias = "test-url", alias = "test_url")]
+    pub test_url: Option<String>,
+}
+
+impl ProxyGroupConfig {
+    pub fn test_url(&self) -> Option<&str> {
+        self.test_url
+            .as_deref()
+            .or(self.url.as_deref())
+            .filter(|url| !url.trim().is_empty())
+    }
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -41,10 +63,88 @@ pub struct TunSnapshot {
     pub stack: String,
 }
 
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default)]
 pub struct ProxyResponse {
-    #[serde(default)]
     pub proxies: BTreeMap<String, Proxy>,
+    pub order: Vec<String>,
+}
+
+impl<'de> Deserialize<'de> for ProxyResponse {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct ResponseVisitor;
+
+        impl<'de> de::Visitor<'de> for ResponseVisitor {
+            type Value = ProxyResponse;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                formatter.write_str("a Mihomo proxy response object")
+            }
+
+            fn visit_map<M>(self, mut map: M) -> Result<Self::Value, M::Error>
+            where
+                M: de::MapAccess<'de>,
+            {
+                let mut proxies = BTreeMap::new();
+                let mut order = Vec::new();
+                while let Some(key) = map.next_key::<String>()? {
+                    if key == "proxies" {
+                        let ordered = map.next_value::<OrderedProxies>()?;
+                        proxies = ordered.proxies;
+                        order = ordered.order;
+                    } else {
+                        let _: de::IgnoredAny = map.next_value()?;
+                    }
+                }
+                Ok(ProxyResponse { proxies, order })
+            }
+        }
+
+        deserializer.deserialize_map(ResponseVisitor)
+    }
+}
+
+#[derive(Debug, Default)]
+struct OrderedProxies {
+    proxies: BTreeMap<String, Proxy>,
+    order: Vec<String>,
+}
+
+impl<'de> Deserialize<'de> for OrderedProxies {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct ProxiesVisitor;
+
+        impl<'de> de::Visitor<'de> for ProxiesVisitor {
+            type Value = OrderedProxies;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                formatter.write_str("a map of Mihomo proxies")
+            }
+
+            fn visit_map<M>(self, mut map: M) -> Result<Self::Value, M::Error>
+            where
+                M: de::MapAccess<'de>,
+            {
+                let mut proxies = BTreeMap::new();
+                let mut order = Vec::new();
+                while let Some((name, mut proxy)) = map.next_entry::<String, Proxy>()? {
+                    if proxy.name.is_empty() {
+                        proxy.name = name.clone();
+                    }
+                    order.push(name.clone());
+                    proxies.insert(name, proxy);
+                }
+                Ok(OrderedProxies { proxies, order })
+            }
+        }
+
+        deserializer.deserialize_map(ProxiesVisitor)
+    }
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -65,6 +165,8 @@ pub struct Proxy {
     pub provider_name: String,
     #[serde(default)]
     pub hidden: bool,
+    #[serde(default, rename = "testUrl", alias = "test-url", alias = "test_url")]
+    pub test_url: Option<String>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
 }
@@ -126,6 +228,8 @@ pub struct Provider {
     pub proxies: Vec<Proxy>,
     #[serde(default, rename = "subscriptionInfo")]
     pub subscription_info: Option<SubscriptionInfo>,
+    #[serde(default, rename = "testUrl", alias = "test-url", alias = "test_url")]
+    pub test_url: Option<String>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
 }
@@ -313,6 +417,7 @@ mod tests {
         .expect("parse response");
         let proxy: &Proxy = response.proxies.get("AUTO").expect("proxy");
         assert!(proxy.is_group());
+        assert_eq!(response.order, vec!["AUTO"]);
         assert_eq!(
             proxy.extra.get("future").and_then(|v| v.as_bool()),
             Some(true)
@@ -336,5 +441,14 @@ mod tests {
         assert_eq!(info.download, 224_755_536_444);
         assert_eq!(info.total, 429_496_729_600);
         assert_eq!(info.expire, 1_793_196_042);
+    }
+
+    #[test]
+    fn preserves_proxy_map_order_from_controller_response() {
+        let response: ProxyResponse = serde_json::from_str(
+            r#"{"proxies":{"优先组":{"name":"优先组","type":"Selector","all":["A"]},"备用组":{"name":"备用组","type":"Selector","all":["B"]}}}"#,
+        )
+        .expect("proxy response");
+        assert_eq!(response.order, vec!["优先组", "备用组"]);
     }
 }

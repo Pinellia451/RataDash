@@ -5,6 +5,7 @@ use ratatui::{
     widgets::{Block, BorderType, Borders, Cell, Clear, Paragraph, Row, Sparkline, Table, Wrap},
     Frame,
 };
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::app::{App, ConnectionState, FocusTarget, Page, ToastKind};
 
@@ -126,7 +127,7 @@ fn render_navigation(frame: &mut Frame<'_>, app: &App, area: Rect) {
     let mut lines = Vec::new();
     for page in Page::ALL {
         let label = format!(" {} ", page.title());
-        if app.focus == FocusTarget::RootMenu && page == app.page {
+        if page == app.page {
             lines.push(Line::styled(label, SELECTED));
         } else {
             lines.push(Line::styled(label, Style::new().fg(Color::White)));
@@ -279,12 +280,18 @@ fn render_proxies(frame: &mut Frame<'_>, app: &App, area: Rect) {
         .constraints([Constraint::Percentage(36), Constraint::Percentage(64)])
         .split(area);
     let groups = app.proxy_groups();
+    let group_inner_width = columns[0].width.saturating_sub(2);
+    let group_name_width = (group_inner_width * 42 / 100).saturating_sub(2) as usize;
+    let group_current_width = (group_inner_width * 40 / 100).saturating_sub(1) as usize;
     let group_rows = groups.iter().enumerate().map(|(index, proxy)| {
         let marker = if proxy.name == proxy.now { "●" } else { " " };
         Row::new(vec![
-            Cell::from(format!("{marker} {}", proxy.name)),
+            Cell::from(format!(
+                "{marker} {}",
+                truncate_label(&proxy.name, group_name_width)
+            )),
             Cell::from(proxy.kind.clone()),
-            Cell::from(proxy.now.clone()),
+            Cell::from(truncate_label(&proxy.now, group_current_width)),
         ])
         .style(if index == app.group_index {
             SELECTED
@@ -308,6 +315,8 @@ fn render_proxies(frame: &mut Frame<'_>, app: &App, area: Rect) {
     );
 
     let nodes = app.filtered_node_names();
+    let node_inner_width = columns[1].width.saturating_sub(2);
+    let node_name_width = (node_inner_width * 46 / 100) as usize;
     let node_rows = nodes.iter().enumerate().map(|(index, name)| {
         let proxy = app.proxies.get(*name);
         let selected = app
@@ -320,7 +329,7 @@ fn render_proxies(frame: &mut Frame<'_>, app: &App, area: Rect) {
             .unwrap_or_else(|| "-".to_string());
         Row::new(vec![
             Cell::from(if selected { "●" } else { " " }),
-            Cell::from((*name).to_string()),
+            Cell::from(truncate_label(name, node_name_width)),
             Cell::from(proxy.map(|p| p.kind.clone()).unwrap_or_default()),
             Cell::from(match alive {
                 Some(true) => "在线",
@@ -364,6 +373,11 @@ fn render_connections(frame: &mut Frame<'_>, app: &App, area: Rect) {
         .constraints([Constraint::Percentage(68), Constraint::Percentage(32)])
         .split(area);
     let connections = app.filtered_connections();
+    let connection_inner_width = columns[0].width.saturating_sub(2);
+    let host_width = (connection_inner_width * 24 / 100) as usize;
+    let target_width = (connection_inner_width * 20 / 100) as usize;
+    let rule_width = 13usize;
+    let chain_width = (connection_inner_width * 24 / 100) as usize;
     let rows = connections.iter().enumerate().map(|(index, connection)| {
         let host = if connection.metadata.host.is_empty() {
             connection.metadata.destination_ip.clone()
@@ -371,14 +385,17 @@ fn render_connections(frame: &mut Frame<'_>, app: &App, area: Rect) {
             connection.metadata.host.clone()
         };
         Row::new(vec![
-            Cell::from(host),
-            Cell::from(format!(
-                "{}:{}",
-                connection.metadata.destination_ip, connection.metadata.destination_port
+            Cell::from(truncate_label(&host, host_width)),
+            Cell::from(truncate_label(
+                &format!(
+                    "{}:{}",
+                    connection.metadata.destination_ip, connection.metadata.destination_port
+                ),
+                target_width,
             )),
             Cell::from(connection.metadata.network.clone()),
-            Cell::from(connection.rule.clone()),
-            Cell::from(connection.chains.join(" → ")),
+            Cell::from(truncate_label(&connection.rule, rule_width)),
+            Cell::from(truncate_label(&connection.chains.join(" → "), chain_width)),
             Cell::from(format_bytes(connection.download)),
             Cell::from(format_bytes(connection.upload)),
         ])
@@ -575,6 +592,7 @@ fn render_settings(frame: &mut Frame<'_>, app: &App, area: Rect) {
     );
 
     let providers = app.provider_list();
+    let provider_name_width = (sections[1].width.saturating_sub(2) * 30 / 100) as usize;
     let rows = providers.iter().enumerate().map(|(index, provider)| {
         let usage = provider
             .subscription_info
@@ -588,7 +606,7 @@ fn render_settings(frame: &mut Frame<'_>, app: &App, area: Rect) {
             })
             .unwrap_or_else(|| "-".to_string());
         Row::new(vec![
-            Cell::from(provider.name.clone()),
+            Cell::from(truncate_label(&provider.name, provider_name_width)),
             Cell::from(provider.vehicle_type.clone()),
             Cell::from(provider.proxies.len().to_string()),
             Cell::from(usage),
@@ -627,9 +645,10 @@ fn render_settings(frame: &mut Frame<'_>, app: &App, area: Rect) {
     );
 
     let rule_providers = app.rule_provider_list();
+    let rule_provider_name_width = (sections[2].width.saturating_sub(2) * 28 / 100) as usize;
     let rows = rule_providers.iter().enumerate().map(|(index, provider)| {
         Row::new(vec![
-            Cell::from(provider.name.clone()),
+            Cell::from(truncate_label(&provider.name, rule_provider_name_width)),
             Cell::from(provider.behavior.clone()),
             Cell::from(provider.format.clone()),
             Cell::from(provider.rule_count.to_string()),
@@ -692,7 +711,7 @@ fn render_footer(frame: &mut Frame<'_>, app: &App, area: Rect) {
         Paragraph::new(Line::from(vec![
             Span::styled(filter, Style::new().fg(Color::Yellow)),
             Span::styled(pending, Style::new().fg(Color::Yellow)),
-            Span::raw("↑↓/jk选择  Enter进入  Tab循环  Esc循环返回  /筛选  r刷新  ?帮助  q退出"),
+            Span::raw("↑↓/jk选择  ←/→切换面板  Enter进入  /筛选  r刷新  ?帮助  q退出"),
         ]))
         .alignment(Alignment::Center)
         .block(
@@ -707,9 +726,9 @@ fn render_footer(frame: &mut Frame<'_>, app: &App, area: Rect) {
 fn render_help(frame: &mut Frame<'_>, app: &App, area: Rect) {
     let help = vec![
         Line::styled("导航", Style::new().fg(ACCENT).add_modifier(Modifier::BOLD)),
-        Line::from("一级菜单：↑↓/jk 选择；Enter/Tab 进入当前页面面板"),
-        Line::from("面板焦点：↑↓/jk 操作列表；Enter 进入下一个面板；Tab 循环焦点；Esc 循环返回"),
-        Line::from("根菜单按 Esc 保持当前状态；q 退出"),
+        Line::from("一级菜单：↑↓/jk 选择；Enter 进入当前页面面板"),
+        Line::from("面板焦点：↑↓/jk 操作列表；←/→ 循环切换面板；Enter 进入下一个面板"),
+        Line::from("q 退出；Esc 在帮助、确认框和筛选输入中仍用于关闭或取消"),
         Line::from(""),
         Line::styled("代理", Style::new().fg(ACCENT).add_modifier(Modifier::BOLD)),
         Line::from("代理内容：Enter 切换节点   t 节点测速   T 代理组测速"),
@@ -886,6 +905,29 @@ pub fn format_bytes(bytes: u64) -> String {
         format!("{} {}", bytes, UNITS[unit])
     } else {
         format!("{value:.1} {}", UNITS[unit])
+    }
+}
+
+fn truncate_label(value: &str, max_width: usize) -> String {
+    if max_width == 0 {
+        return String::new();
+    }
+    if value.width() <= max_width {
+        value.to_string()
+    } else if max_width == 1 {
+        "…".to_string()
+    } else {
+        let mut visible = String::new();
+        let mut width = 0;
+        for ch in value.chars() {
+            let char_width = UnicodeWidthChar::width(ch).unwrap_or(0);
+            if width + char_width > max_width - 1 {
+                break;
+            }
+            visible.push(ch);
+            width += char_width;
+        }
+        format!("{visible}…")
     }
 }
 

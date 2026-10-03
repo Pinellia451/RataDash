@@ -19,7 +19,7 @@
 
 RataDash 只负责控制面板，不内置、下载或启动代理内核。它通过 Mihomo 的 REST API 和 WebSocket 接口连接到已有核心，适合在服务器、开发机或远程终端中快速完成日常代理管理。
 
-它的交互重点是“面板焦点链”：左侧一级菜单始终可见，`Enter` 进入下一个面板，`Tab` 循环切换焦点，`Esc` 循环返回。整个界面不依赖数字编号菜单。
+它的交互重点是“面板焦点链”：左侧一级菜单始终可见，`Enter` 进入下一个面板，`←/→` 循环切换焦点。整个界面不依赖数字编号菜单。
 
 ## ✨ Features
 
@@ -28,7 +28,7 @@ RataDash 只负责控制面板，不内置、下载或启动代理内核。它�
 - **连接**：浏览活动连接、筛选连接、查看详情并关闭单条或全部连接。
 - **日志**：实时日志流、级别切换、暂停/继续和本地清屏。
 - **设置**：切换 `rule → global → direct`，分别管理订阅 Provider 与规则 Provider。
-- **焦点导航**：绿色边框表示当前面板，支持 `Enter`、循环 `Tab` 和循环 `Esc`。
+- **焦点导航**：绿色边框表示当前面板，支持 `Enter` 和循环 `←/→`。
 - **安全控制**：Secret 不落盘，支持只读模式，远程明文 HTTP 会给出警告。
 
 ## 🚀 Quick Start
@@ -100,8 +100,7 @@ RATADASH_SECRET='your-secret' cargo run -- \
 |---|---|
 | `↑` / `↓`, `j` / `k` | 操作当前焦点面板中的列表 |
 | `Enter` | 进入下一个面板；末级执行当前页面动作 |
-| `Tab` | 循环切换焦点面板 |
-| `Esc` | 循环返回焦点面板；根菜单返回当前页面末级 |
+| `←` / `→` | 循环切换焦点面板 |
 | `t` / `T` | 节点测速 / 代理组测速 |
 | `/` | 筛选连接或日志 |
 | `d` / `D` | 关闭选中连接 / 关闭全部连接 |
@@ -172,8 +171,8 @@ GitHub Actions 会在发布时额外生成 `ratadash-linux-x86_64` 并上传到 
 推送版本 Tag 后，GitHub Actions 会自动构建并发布三个版本：
 
 ```bash
-git tag -a v0.2.0 -m "RataDash v0.2.0"
-git push origin v0.2.0
+git tag -a v0.3.0 -m "RataDash v0.3.0"
+git push origin v0.3.0
 ```
 
 Workflow 会生成 Linux x86_64（musl）、macOS arm64 和 macOS x86_64 二进制，并自动创建 GitHub Release 附件。
