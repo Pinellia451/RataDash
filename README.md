@@ -38,6 +38,26 @@ RataDash 只负责控制面板，不内置、下载或启动代理内核。它�
 - Rust 1.91.1 or newer
 - 一个已经运行并开放 External Controller 的 Mihomo / Clash 核心
 
+### One-command install
+
+在仓库目录中安装已编译的版本：
+
+```bash
+./install.sh
+```
+
+脚本只负责复制 `release/` 中的预编译二进制，不会下载源码或安装 Rust。也可以指定安装目录：
+
+```bash
+./install.sh --install-dir "$HOME/bin"
+```
+
+默认安装到 `~/.local/bin/ratadash`。如果要安装指定文件：
+
+```bash
+./install.sh --binary release/ratadash-darwin-x86_64
+```
+
 ### Build from source
 
 ```bash
@@ -138,13 +158,25 @@ RataDash 通过 External Controller 访问 Mihomo，主要使用以下接口：
 
 ## 📦 Prebuilt binary
 
-仓库发布目录中的二进制是当前 macOS arm64 构建版本：
+仓库发布目录中的二进制包括：
 
 ```text
 release/ratadash-darwin-arm64
+release/ratadash-darwin-x86_64
 ```
 
-其他平台建议从源码构建，或从 GitHub Releases 下载对应平台的构建产物。`target/`、`.micromamba/` 和本地测试脚本不属于发布内容。
+GitHub Actions 会在发布时额外生成 `ratadash-linux-x86_64` 并上传到 GitHub Release。安装脚本会根据当前系统和 CPU 架构自动选择对应文件。其他平台建议从源码构建，或从 GitHub Releases 下载对应平台的构建产物。`target/`、`.micromamba/` 和本地测试脚本不属于发布内容。
+
+## 🤖 Automated releases
+
+推送版本 Tag 后，GitHub Actions 会自动构建并发布三个版本：
+
+```bash
+git tag -a v0.2.0 -m "RataDash v0.2.0"
+git push origin v0.2.0
+```
+
+Workflow 会生成 Linux x86_64（musl）、macOS arm64 和 macOS x86_64 二进制，并自动创建 GitHub Release 附件。
 
 ## 📚 References & notices
 
