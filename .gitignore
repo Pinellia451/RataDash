@@ -1,4 +1,5 @@
 /target/
+/release/
 /.micromamba/
 /scripts/
 /.idea/

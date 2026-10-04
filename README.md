@@ -40,23 +40,27 @@ RataDash 只负责控制面板，不内置、下载或启动代理内核。它�
 
 ### One-command install
 
-在仓库目录中安装已编译的版本：
+从 GitHub Releases 下载当前系统和 CPU 架构对应的最新版本：
 
 ```bash
-./install.sh
+curl -fsSL https://raw.githubusercontent.com/Pinellia451/RataDash/main/install.sh | bash
 ```
 
-脚本只负责复制 `release/` 中的预编译二进制，不会下载源码或安装 Rust。也可以指定安装目录：
+默认安装到 `~/.local/bin/ratadash`。也可以指定安装目录：
 
 ```bash
-./install.sh --install-dir "$HOME/bin"
+curl -fsSL https://raw.githubusercontent.com/Pinellia451/RataDash/main/install.sh \
+  | bash -s -- --install-dir "$HOME/bin"
 ```
 
-默认安装到 `~/.local/bin/ratadash`。如果要安装指定文件：
+需要安装指定版本时，传入 Release Tag：
 
 ```bash
-./install.sh --binary release/ratadash-darwin-x86_64
+curl -fsSL https://raw.githubusercontent.com/Pinellia451/RataDash/main/install.sh \
+  | bash -s -- --version v0.3.0
 ```
+
+安装脚本只下载 GitHub Release 中的预编译二进制，不会下载源码或安装 Rust。
 
 ### Build from source
 
@@ -157,14 +161,15 @@ RataDash 通过 External Controller 访问 Mihomo，主要使用以下接口：
 
 ## 📦 Prebuilt binary
 
-仓库发布目录中的二进制包括：
+预编译二进制只通过 GitHub Releases 发布，安装脚本会自动选择当前平台对应的附件：
 
-```text
-release/ratadash-darwin-arm64
-release/ratadash-darwin-x86_64
-```
+| Platform | Release asset |
+|---|---|
+| Linux x86_64 | `ratadash-linux-x86_64` |
+| macOS Apple Silicon | `ratadash-darwin-arm64` |
+| macOS Intel | `ratadash-darwin-x86_64` |
 
-GitHub Actions 会在发布时额外生成 `ratadash-linux-x86_64` 并上传到 GitHub Release。安装脚本会根据当前系统和 CPU 架构自动选择对应文件。其他平台建议从源码构建，或从 GitHub Releases 下载对应平台的构建产物。`target/`、`.micromamba/` 和本地测试脚本不属于发布内容。
+其他平台建议从源码构建。`target/`、`.micromamba/` 和本地测试脚本不属于发布内容。
 
 ## 🤖 Automated releases
 

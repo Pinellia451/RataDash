@@ -2,27 +2,26 @@
 set -Eeuo pipefail
 
 PROJECT_NAME="ratadash"
+REPOSITORY="Pinellia451/RataDash"
 INSTALL_DIR="${RATADASH_INSTALL_DIR:-${HOME}/.local/bin}"
-BINARY_PATH=""
+VERSION="latest"
 
 usage() {
   cat <<'EOF'
 RataDash binary installer
 
-This script only copies a prebuilt RataDash binary. It does not clone,
-download, compile, or install Rust.
+Downloads the matching prebuilt binary from the latest GitHub Release.
 
 Usage:
-  ./install.sh [options]
+  install.sh [options]
 
 Options:
   --install-dir DIR  Install the binary into DIR.
-  --binary PATH      Copy this binary instead of auto-detecting release/.
+  --version VERSION  Install a specific release tag instead of latest.
   -h, --help         Show this help.
 
 Environment:
   RATADASH_INSTALL_DIR  Same as --install-dir.
-  RATADASH_BINARY       Same as --binary.
 EOF
 }
 
@@ -33,9 +32,9 @@ while [[ $# -gt 0 ]]; do
       INSTALL_DIR="$2"
       shift 2
       ;;
-    --binary)
-      [[ $# -ge 2 ]] || { echo "error: --binary needs a value" >&2; exit 2; }
-      BINARY_PATH="$2"
+    --version)
+      [[ $# -ge 2 ]] || { echo "error: --version needs a value" >&2; exit 2; }
+      VERSION="$2"
       shift 2
       ;;
     -h|--help)
@@ -50,44 +49,57 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-BINARY_PATH="${RATADASH_BINARY:-${BINARY_PATH}}"
+case "$(uname -s):$(uname -m)" in
+  Darwin:arm64|Darwin:aarch64)
+    ASSET="ratadash-darwin-arm64"
+    ;;
+  Darwin:x86_64|Darwin:amd64)
+    ASSET="ratadash-darwin-x86_64"
+    ;;
+  Linux:x86_64|Linux:amd64)
+    ASSET="ratadash-linux-x86_64"
+    ;;
+  *)
+    echo "error: no prebuilt RataDash release for $(uname -s)-$(uname -m)" >&2
+    echo "       supported platforms: Linux x86_64, macOS arm64, macOS x86_64" >&2
+    exit 1
+    ;;
+esac
 
-if [[ -z "${BINARY_PATH}" ]]; then
-  case "$(uname -s):$(uname -m)" in
-    Darwin:arm64|Darwin:aarch64)
-      BINARY_PATH="${SCRIPT_DIR}/release/ratadash-darwin-arm64"
-      ;;
-    Darwin:x86_64|Darwin:amd64)
-      BINARY_PATH="${SCRIPT_DIR}/release/ratadash-darwin-x86_64"
-      ;;
-    Linux:x86_64|Linux:amd64)
-      BINARY_PATH="${SCRIPT_DIR}/release/ratadash-linux-x86_64"
-      ;;
-    Linux:aarch64|Linux:arm64)
-      BINARY_PATH="${SCRIPT_DIR}/release/ratadash-linux-arm64"
-      ;;
-    *)
-      echo "error: unsupported platform $(uname -s)-$(uname -m); use --binary PATH" >&2
-      exit 1
-      ;;
-  esac
+if [[ "${VERSION}" == "latest" ]]; then
+  DOWNLOAD_URL="https://github.com/${REPOSITORY}/releases/latest/download/${ASSET}"
+else
+  DOWNLOAD_URL="https://github.com/${REPOSITORY}/releases/download/${VERSION}/${ASSET}"
 fi
 
-if [[ ! -f "${BINARY_PATH}" ]]; then
-  echo "error: prebuilt binary not found: ${BINARY_PATH}" >&2
-  echo "       build or copy a release binary first, or pass --binary PATH" >&2
+TEMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/ratadash-install.XXXXXX")"
+cleanup() {
+  rm -rf "${TEMP_DIR}"
+}
+trap cleanup EXIT
+
+DOWNLOADED_BINARY="${TEMP_DIR}/${PROJECT_NAME}"
+echo "info: detected $(uname -s) $(uname -m)"
+echo "info: downloading ${ASSET} (${VERSION})"
+
+if command -v curl >/dev/null 2>&1; then
+  curl --fail --location --silent --show-error "${DOWNLOAD_URL}" --output "${DOWNLOADED_BINARY}"
+elif command -v wget >/dev/null 2>&1; then
+  wget --quiet --output-document="${DOWNLOADED_BINARY}" "${DOWNLOAD_URL}"
+else
+  echo "error: curl or wget is required to download RataDash" >&2
   exit 1
 fi
-if [[ ! -x "${BINARY_PATH}" ]]; then
-  echo "error: binary is not executable: ${BINARY_PATH}" >&2
+
+if [[ ! -s "${DOWNLOADED_BINARY}" ]]; then
+  echo "error: downloaded release asset is empty: ${DOWNLOAD_URL}" >&2
   exit 1
 fi
 
 mkdir -p "${INSTALL_DIR}"
-TEMP_BINARY="${INSTALL_DIR}/.${PROJECT_NAME}.tmp.$$"
-install -m 755 "${BINARY_PATH}" "${TEMP_BINARY}"
-mv -f "${TEMP_BINARY}" "${INSTALL_DIR}/${PROJECT_NAME}"
+TEMP_INSTALL="$(mktemp "${INSTALL_DIR}/.${PROJECT_NAME}.tmp.XXXXXX")"
+install -m 755 "${DOWNLOADED_BINARY}" "${TEMP_INSTALL}"
+mv -f "${TEMP_INSTALL}" "${INSTALL_DIR}/${PROJECT_NAME}"
 
 echo "info: installed ${PROJECT_NAME} to ${INSTALL_DIR}/${PROJECT_NAME}"
 
@@ -96,16 +108,22 @@ case ":${PATH}:" in
   *)
     echo "warn: ${INSTALL_DIR} is not in your PATH"
     case "${SHELL##*/}" in
-      zsh) SHELL_RC="\$HOME/.zshrc" ;;
-      fish) SHELL_RC="\$HOME/.config/fish/config.fish" ;;
-      *) SHELL_RC="\$HOME/.bashrc" ;;
+      zsh)
+        echo
+        echo 'Add this to $HOME/.zshrc:'
+        echo "  export PATH=\"${INSTALL_DIR}:\$PATH\""
+        ;;
+      fish)
+        echo
+        echo 'Run this in fish:'
+        echo "  fish_add_path ${INSTALL_DIR}"
+        ;;
+      *)
+        echo
+        echo 'Add this to $HOME/.bashrc:'
+        echo "  export PATH=\"${INSTALL_DIR}:\$PATH\""
+        ;;
     esac
-    echo
-    echo "Add this to ${SHELL_RC}:"
-    echo "  export PATH=\"${INSTALL_DIR}:\$PATH\""
-    echo
-    echo "Then restart your shell or run:"
-    echo "  export PATH=\"${INSTALL_DIR}:\$PATH\""
     ;;
 esac
 
